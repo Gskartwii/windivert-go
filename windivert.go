@@ -1,7 +1,7 @@
 package windivert
 
 /*
-#cgo CFLAGS: -Iwindivert
+#cgo CFLAGS: -Iinclude
 #cgo LDFLAGS: -L. -lwindivert
 #include <stdlib.h>
 #include <windivert.h>
@@ -215,7 +215,7 @@ func CalculateChecksums(packet []byte, address *Address, flags ChecksumFlags) ui
 	numChecksums := C.WinDivertHelperCalcChecksums(C.PVOID(
 		unsafe.Pointer(&packet[0])),
 		C.UINT(len(packet)),
-		(*C.WINDIVERT_ADDRESS)(unsafe.Pointer(cgoFromAddress(address))),
+        (*C.WINDIVERT_ADDRESS)(unsafe.Pointer(cgoFromAddress(address))),
 		C.UINT64(flags))
 
 	return uint(numChecksums)
