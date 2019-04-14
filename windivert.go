@@ -215,7 +215,7 @@ func CalculateChecksums(packet []byte, address *Address, flags ChecksumFlags) ui
 	numChecksums := C.WinDivertHelperCalcChecksums(C.PVOID(
 		unsafe.Pointer(&packet[0])),
 		C.UINT(len(packet)),
-        (*C.WINDIVERT_ADDRESS)(unsafe.Pointer(cgoFromAddress(address))),
+		(*C.WINDIVERT_ADDRESS)(unsafe.Pointer(cgoFromAddress(address))),
 		C.UINT64(flags))
 
 	return uint(numChecksums)
@@ -245,7 +245,7 @@ func (handle *Handle) SendUDP(packet []byte, src *net.UDPAddr, dst *net.UDPAddr,
 		IHL:        5, // Normal IHL value
 		TOS:        0,
 		Id:         0,
-		Flags:      0,
+		Flags:      1 << 1, // Don't fragment (default)
 		FragOffset: 0,
 		TTL:        255,
 		Protocol:   layers.IPProtocolUDP,
