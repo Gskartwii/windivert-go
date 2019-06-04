@@ -212,11 +212,7 @@ const (
 )
 
 func CalculateChecksums(packet []byte, address *Address, flags ChecksumFlags) uint {
-	numChecksums := C.WinDivertHelperCalcChecksums(C.PVOID(
-		unsafe.Pointer(&packet[0])),
-		C.UINT(len(packet)),
-		(*C.WINDIVERT_ADDRESS)(unsafe.Pointer(cgoFromAddress(address))),
-		C.UINT64(flags))
+	numChecksums := C.WinDivertHelperCalcChecksums(C.PVOID(unsafe.Pointer(&packet[0])), C.UINT(len(packet)), (*C.WINDIVERT_ADDRESS)(unsafe.Pointer(cgoFromAddress(address))), C.UINT64(flags))
 
 	return uint(numChecksums)
 }
