@@ -9,21 +9,30 @@ package windivert
 // Hacky TODO
 typedef struct {
 	INT64 Timestamp;
-	UINT32 IfIdx;
-	UINT32 SubIfIdx;
+	UINT64 Layer:8;
+	UINT64 Event:8;
+	UINT64 Sniffed:1;
+	UINT64 Outbound:1;
+	UINT64 Loopback:1;
+	UINT64 Impostor:1;
+	UINT64 IPv6:1;
+	UINT64 IPChecksum:1;
+	UINT64 TCPChecksum:1;
+	UINT64 UDPChecksum:1;
 	union {
-		struct {
-			UINT8 Direction:1;
-			UINT8 Loopback:1;
-			UINT8 Impostor:1;
-			UINT8 PseudoIPChecksum:1;
-			UINT8 PseudoTCPChecksum:1;
-			UINT8 PseudoUDPChecksum:1;
-			UINT8 Reserved:2;
-		};
-		UINT8 Flags;
-	} FlagUnion;
+        WINDIVERT_DATA_NETWORK Network;
+        WINDIVERT_DATA_FLOW    Flow;
+        WINDIVERT_DATA_SOCKET  Socket;
+        WINDIVERT_DATA_REFLECT Reflect;
+    } DataUnion;
 } WINDIVERT_ADDRESS_FLAGS;
+
+void SetOutbound(WINDIVERT_ADDRESS_FLAGS *addr, UINT64 is_outbound) {
+	addr->Outbound = is_outbound;
+}
+void SetImpostor(WINDIVERT_ADDRESS_FLAGS *addr, UINT64 is_impostor) {
+	addr->Impostor = is_impostor;
+}
 
 char* GetErrorMessage(DWORD errCode) {
 	LPSTR message;
@@ -48,17 +57,8 @@ import (
 
 type Layer uint8
 type Param uint8
-type AddrFlags uint8
+type AddrFlags uint64
 type HandleFlags uint64
-
-const (
-	PseudoUDPChecksum AddrFlags = 1 << 2
-	PseudoTCPChecksum           = 1 << 3
-	PseudoIPChecksum            = 1 << 4
-	Impostor                    = 1 << 5
-	Loopback                    = 1 << 6
-	IsOutbound                  = 1 << 7
-)
 
 const (
 	LayerNetwork        Layer = 0
@@ -72,16 +72,20 @@ const (
 )
 
 const (
-	FlagSniff HandleFlags = C.WINDIVERT_FLAG_SNIFF
-	FlagDrop              = C.WINDIVERT_FLAG_DROP
-	FlagDebug             = C.WINDIVERT_FLAG_DEBUG
+	FlagSniff     HandleFlags = C.WINDIVERT_FLAG_SNIFF
+	FlagDrop                  = C.WINDIVERT_FLAG_DROP
+	FlagRecvOnly              = C.WINDIVERT_FLAG_RECV_ONLY
+	FlagSendOnly              = C.WINDIVERT_FLAG_SEND_ONLY
+	FlagNoInstall             = C.WINDIVERT_FLAG_NO_INSTALL
+	FlagFragments             = C.WINDIVERT_FLAG_FRAGMENTS
 )
 
 type Address struct {
 	Timestamp         int64
 	InterfaceIndex    uint32
 	SubInterfaceIndex uint32
-	Flags             AddrFlags
+	Outbound          bool
+	Impostor bool
 }
 
 func GetLastError() error {
@@ -109,9 +113,9 @@ func init() {
 func addressFromCGo(addr *C.WINDIVERT_ADDRESS_FLAGS) *Address {
 	newaddr := new(Address)
 	newaddr.Timestamp = int64(addr.Timestamp)
-	newaddr.InterfaceIndex = uint32(addr.IfIdx)
-	newaddr.SubInterfaceIndex = uint32(addr.SubIfIdx)
-	newaddr.Flags = AddrFlags(*(*uint8)(unsafe.Pointer(&addr.FlagUnion)))
+	networkData := (*C.WINDIVERT_DATA_NETWORK)(unsafe.Pointer(&addr.DataUnion))
+	newaddr.InterfaceIndex = uint32(networkData.IfIdx)
+	newaddr.SubInterfaceIndex = uint32(networkData.SubIfIdx)
 
 	return newaddr
 }
@@ -120,9 +124,15 @@ func addressFromCGo(addr *C.WINDIVERT_ADDRESS_FLAGS) *Address {
 func cgoFromAddress(addr *Address) *C.WINDIVERT_ADDRESS_FLAGS {
 	newaddr := new(C.WINDIVERT_ADDRESS_FLAGS)
 	newaddr.Timestamp = C.INT64(addr.Timestamp)
-	newaddr.IfIdx = C.UINT32(addr.InterfaceIndex)
-	newaddr.SubIfIdx = C.UINT32(addr.SubInterfaceIndex)
-	*(*uint8)(unsafe.Pointer(&newaddr.FlagUnion)) = uint8(addr.Flags)
+	networkData := (*C.WINDIVERT_DATA_NETWORK)(unsafe.Pointer(&newaddr.DataUnion))
+	networkData.IfIdx = C.UINT32(addr.InterfaceIndex)
+	networkData.SubIfIdx = C.UINT32(addr.SubInterfaceIndex)
+	if addr.Outbound {
+		C.SetOutbound(newaddr, 1)
+	}
+	if addr.Impostor {
+		C.SetImpostor(newaddr, 1)
+	}
 
 	return newaddr
 }
@@ -143,7 +153,7 @@ func Open(filter string, layer Layer, priority int16, flags HandleFlags) (*Handl
 			var errorString *C.char // Doesn't need to be freed, points at const char*
 			var errorPos C.UINT
 
-			isFilterValid := C.WinDivertHelperCheckFilter(handle.filterCs, C.WINDIVERT_LAYER(layer), &errorString, &errorPos)
+			isFilterValid := C.WinDivertHelperCompileFilter(handle.filterCs, C.WINDIVERT_LAYER(layer), nil, 0, &errorString, &errorPos)
 			if isFilterValid == cFalse {
 				return handle, fmt.Errorf("filter error at %d: %s", uint(errorPos), C.GoString(errorString))
 			}
@@ -157,7 +167,7 @@ func Open(filter string, layer Layer, priority int16, flags HandleFlags) (*Handl
 func (handle *Handle) Recv(buf []byte) (*Address, uint32, error) {
 	var address C.WINDIVERT_ADDRESS
 	var recvLen C.uint
-	success := C.WinDivertRecv(handle.handle, C.PVOID(unsafe.Pointer(&buf[0])), C.uint(len(buf)), (*C.WINDIVERT_ADDRESS)(unsafe.Pointer(&address)), &recvLen)
+	success := C.WinDivertRecv(handle.handle, unsafe.Pointer(&buf[0]), C.uint(len(buf)), &recvLen, (*C.WINDIVERT_ADDRESS)(unsafe.Pointer(&address)))
 	trueAddress := addressFromCGo((*C.WINDIVERT_ADDRESS_FLAGS)(unsafe.Pointer(&address)))
 	if success == cFalse { // FALSE
 		return trueAddress, uint32(recvLen), GetLastError()
@@ -168,7 +178,7 @@ func (handle *Handle) Recv(buf []byte) (*Address, uint32, error) {
 func (handle *Handle) Send(packet []byte, address *Address) (uint32, error) {
 	trueAddress := (*C.WINDIVERT_ADDRESS)(unsafe.Pointer(cgoFromAddress(address)))
 	var sendLen C.uint
-	success := C.WinDivertSend(handle.handle, C.PVOID(unsafe.Pointer(&packet[0])), C.uint(len(packet)), trueAddress, &sendLen)
+	success := C.WinDivertSend(handle.handle, unsafe.Pointer(&packet[0]), C.uint(len(packet)), &sendLen, trueAddress)
 	if success == cFalse { // FALSE
 		return uint32(sendLen), GetLastError()
 	}
@@ -212,7 +222,7 @@ const (
 )
 
 func CalculateChecksums(packet []byte, address *Address, flags ChecksumFlags) uint {
-	numChecksums := C.WinDivertHelperCalcChecksums(C.PVOID(unsafe.Pointer(&packet[0])), C.UINT(len(packet)), (*C.WINDIVERT_ADDRESS)(unsafe.Pointer(cgoFromAddress(address))), C.UINT64(flags))
+	numChecksums := C.WinDivertHelperCalcChecksums(unsafe.Pointer(&packet[0]), C.UINT(len(packet)), (*C.WINDIVERT_ADDRESS)(unsafe.Pointer(cgoFromAddress(address))), C.UINT64(flags))
 
 	return uint(numChecksums)
 }
@@ -262,10 +272,7 @@ func (handle *Handle) SendUDP(packet []byte, src *net.UDPAddr, dst *net.UDPAddr,
 		return err
 	}
 
-	address := &Address{InterfaceIndex: ifIdx, SubInterfaceIndex: subIfIdx}
-	if isOutbound {
-		address.Flags = IsOutbound
-	}
+	address := &Address{InterfaceIndex: ifIdx, SubInterfaceIndex: subIfIdx, Outbound: isOutbound, Impostor: true}
 
 	length, err := handle.Send(buf.Bytes(), address)
 	if err != nil {
